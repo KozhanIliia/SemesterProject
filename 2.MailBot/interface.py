@@ -17,83 +17,70 @@ init_db()
 try:
     gmail = GmailService()
 except Exception as e:
-    print(f"Критична помилка ініціалізації Gmail: {e}")
+    print(f"Помилка ініціалізації сервісу: {e}")
     gmail = None
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [['📩 Вхідні', '✍️ Написати листа']]
+    keyboard = [['Оновити вхідні', 'Написати лист']]
     await update.message.reply_text(
-        "Привіт! Я твій Gmail-бот. Що будемо робити?",
+        "Головне меню. Оберіть дію:",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
 
 async def check_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not gmail:
-        await update.message.reply_text("❌ Помилка авторизації Gmail.")
+        await update.message.reply_text("Помилка авторизації.")
         return
 
-    await update.message.reply_text("🔄 Перевіряю пошту...")
+    await update.message.reply_text("Завантаження даних...")
     emails = gmail.get_latest_emails(5)
 
     if not emails:
-        await update.message.reply_text("📭 Вхідні пусті або помилка доступу.")
+        await update.message.reply_text("Вхідні пусті або відсутній доступ.")
         return
 
-    response_text = "📬 **Останні 5 листів:**\n\n"
+    response_text = "**Список останніх повідомлень:**\n\n"
 
-    # Зберігаємо ID листів у пам'яті (context.user_data), щоб дістати їх при кліку
     context.user_data['last_emails'] = {}
-
     buttons_row = []
 
     for i, mail in enumerate(emails):
-        # Зберігаємо в БД
+        # Збереження в локальну БД
         save_email(mail['id'], mail['sender'], mail['subject'], mail['snippet'])
 
         idx = str(i + 1)
-        # Кешуємо ID листа
         context.user_data['last_emails'][idx] = mail['id']
 
-        # Формуємо текст списку
-        response_text += f"{idx}. 👤 **Від:** {mail['sender']}\n📝 **Тема:** {mail['subject']}\n📎 {mail['snippet'][:50]}...\n\n"
+        response_text += f"{idx}. Від: {mail['sender']}\nТема: {mail['subject']}\nЗміст: {mail['snippet'][:50]}...\n\n"
+        buttons_row.append(InlineKeyboardButton(f"Читати {idx}", callback_data=f"read_{idx}"))
 
-        # Додаємо кнопку
-        buttons_row.append(InlineKeyboardButton(f"📖 {idx}", callback_data=f"read_{idx}"))
+    response_text += "*Оберіть лист для перегляду:*"
 
-    response_text += "👇 *Натисніть на номер листа, щоб прочитати повністю:*"
-
-    # Додаємо клавіатуру з кнопками
     reply_markup = InlineKeyboardMarkup([buttons_row])
-
     await update.message.reply_text(response_text, parse_mode='Markdown', reply_markup=reply_markup)
 
 
-# --- Нова функція: Обробка натискання на кнопку "Читати" ---
 async def read_email_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()  # Прибирає годинничок завантаження на кнопці
+    await query.answer()
 
-    # Отримуємо номер листа з callback_data (наприклад "read_1" -> "1")
     idx = query.data.split("_")[1]
-
-    # Шукаємо реальний ID листа в пам'яті
     email_id = context.user_data.get('last_emails', {}).get(idx)
 
     if not email_id:
-        await query.edit_message_text("⚠️ Список застарів. Оновіть вхідні ще раз.")
+        await query.edit_message_text("Дані застаріли. Оновіть список.")
         return
 
-    await query.message.reply_text("🔄 Завантажую повний текст...")
+    await query.message.reply_text("Отримання тексту...")
 
     full_text = gmail.get_full_message_text(email_id)
 
-    # Обрізаємо, якщо текст занадто довгий для Telegram (ліміт ~4096)
     if len(full_text) > 4000:
-        full_text = full_text[:4000] + "\n\n... (Текст скорочено)"
+        full_text = full_text[:4000] + "\n\n[Текст скорочено]"
 
-    await query.message.reply_text(f"📄 **Лист №{idx}**\n\n{full_text}")
+    await query.message.reply_text(f"**Лист №{idx}**\n\n{full_text}", parse_mode='Markdown')
 
 
 async def start_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -115,30 +102,30 @@ async def get_subject(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def send_email_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not gmail:
-        await update.message.reply_text("❌ Помилка сервісу.")
+        await update.message.reply_text("Сервіс недоступний.")
         return ConversationHandler.END
 
     recipient = context.user_data['recipient']
     subject = context.user_data['subject']
     body = update.message.text
 
-    await update.message.reply_text("🚀 Відправляю...")
+    await update.message.reply_text("Виконується відправка...")
     result = gmail.send_message(recipient, subject, body)
 
-    keyboard = [['📩 Вхідні', '✍️ Написати листа']]
+    keyboard = [['Оновити вхідні', 'Написати лист']]
     if result:
-        await update.message.reply_text("✅ Лист успішно надіслано!",
+        await update.message.reply_text("Лист відправлено.",
                                         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
     else:
-        await update.message.reply_text("❌ Помилка при відправці.",
+        await update.message.reply_text("Помилка відправки.",
                                         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
 
     return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Дію скасовано.",
-                                    reply_markup=ReplyKeyboardMarkup([['📩 Вхідні', '✍️ Написати листа']],
+    await update.message.reply_text("Скасовано.",
+                                    reply_markup=ReplyKeyboardMarkup([['Оновити вхідні', 'Написати лист']],
                                                                      resize_keyboard=True))
     return ConversationHandler.END
 
@@ -148,13 +135,13 @@ async def run_bot():
     token = os.environ.get("TELEGRAM_TOKEN")
 
     if not token:
-        print("\n" + "=" * 40 + "\n❌ ПОМИЛКА: Токен не знайдено!\n" + "=" * 40 + "\n")
+        print("Помилка: TELEGRAM_TOKEN не знайдено.")
         return
 
     application = Application.builder().token(token).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^✍️ Написати листа$'), start_email)],
+        entry_points=[MessageHandler(filters.Regex('^Написати лист$'), start_email)],
         states={
             RECIPIENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_recipient)],
             SUBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_subject)],
@@ -164,11 +151,8 @@ async def run_bot():
     )
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.Regex('^📩 Вхідні$'), check_inbox))
-
-    # Додаємо обробник для кнопок "Читати" (всі callback_data, що починаються на "read_")
+    application.add_handler(MessageHandler(filters.Regex('^Оновити вхідні$'), check_inbox))
     application.add_handler(CallbackQueryHandler(read_email_callback, pattern="^read_"))
-
     application.add_handler(conv_handler)
 
     await application.run_polling()
